@@ -7,11 +7,15 @@ import requests
 from tencentcloud.common import credential
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from tencentcloud.ai3d.v20250513 import models, ai3d_client
+from dotenv import load_dotenv
 
-# 配置信息
-SECRET_ID = "AKIDZCcomdcTF0bz95mFUVHp8F2qStBPVcaN"
-SECRET_KEY = "f6LNGyToz1tfKvW0HgAYvreHivufCVgf"
-REGION = "ap-guangzhou"
+# 加载环境变量
+load_dotenv()
+
+# 从环境变量获取配置信息
+SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
+SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+REGION = os.getenv("TENCENTCLOUD_REGION", "ap-guangzhou")
 
 
 def hunyuan_submit_job(image_path=None, prompt=None, image_url=None):

@@ -1,5 +1,5 @@
-# 通过 pip install 'volcengine-python-sdk[ark]' 安装方舟SDK
 import os
+# 通过 pip install 'volcengine-python-sdk[ark]' 安装方舟SDK
 from volcenginesdkarkruntime import Ark
 
 def generate_image_with_doubao(
@@ -9,7 +9,7 @@ def generate_image_with_doubao(
         guidance_scale: float = 5.5,
         size: str = "adaptive",
         watermark: bool = True,
-        api_key: str = "YOUR_API_KEY",
+        api_key: str = "a8713c43-079c-4971-89db-b0ba6b41343f",
         base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     ):
         """
@@ -78,4 +78,11 @@ if __name__ == "__main__":
 
     print(result_url)
 
-    ''' result_url 示例会包含临时访问凭证，实际使用时会自动生成 '''
+    ''' result_url 示例
+    https://ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com/doubao-seededit-3-0-i2i/021755419250458d5bbc3e631479c4deb362d20ba806f7898fe59.jpeg?X-Tos-Algorithm=TOS4-HMAC-SHA256&X-T
+    os-Credential=AKLTYWJkZTExNjA1ZDUyNDc3YzhjNTM5OGIyNjBhNDcyOTQ%2F20250817%2Fcn-
+    beijing%2Ftos%2Frequest&X-Tos-Date=20250817T082741Z&X-Tos-Expires=86400&X-Tos-Sign
+    ature=8eb7c27b5d7a3fb3ffc5ebf6c42aa7517b4fe79d7edcf3fd1dca0068cb91e4d4&X-Tos-Signed
+    Headers=host&x-tos-process=image%2Fwatermark%2Cimage_YXNzZXRzL3dhdGVybWFyay5wbmc_eC1
+    0b3MtcHJvY2Vzcz1pbWFnZS9yZXNpemUsUF8xNg%3D%3D
+    '''

@@ -7,11 +7,15 @@ import requests
 from tencentcloud.common import credential
 from tencentcloud.common.exception.tencent_cloud_sdk_exception import TencentCloudSDKException
 from tencentcloud.ai3d.v20250513 import models, ai3d_client
+from dotenv import load_dotenv
 
-# 配置信息
-SECRET_ID = "AKIDZCcomdcTF0bz95mFUVHp8F2qStBPVcaN"
-SECRET_KEY = "f6LNGyToz1tfKvW0HgAYvreHivufCVgf"
-REGION = "ap-guangzhou"
+# 加载环境变量
+load_dotenv()
+
+# 从环境变量获取配置信息
+SECRET_ID = os.getenv("TENCENTCLOUD_SECRET_ID")
+SECRET_KEY = os.getenv("TENCENTCLOUD_SECRET_KEY")
+REGION = os.getenv("TENCENTCLOUD_REGION", "ap-guangzhou")
 
 
 def hunyuan_submit_job(image_path=None, prompt=None, image_url=None):
@@ -144,13 +148,22 @@ def hunyuan_query_job(job_id):
             result_file = f"storage/{job_id}.json"
             with open(result_file, 'w', encoding='utf-8') as f:
                 json.dump(resp_dict, f, ensure_ascii=False, indent=4)
+            
             print(f"任务完成，结果已保存到: {result_file}")
             
             # 提取GIF和OBJ文件信息
             try:
                 result_files = resp_dict.get('ResultFile3Ds', [])
                 if result_files:
+
                     file_info = {}
+                    # 首先尝试提取PreviewImageUrl
+                    if result_files[0].get('PreviewImageUrl'):
+                        preview_image_url = result_files[0]['PreviewImageUrl']
+                        print(f"找到预览图URL: {preview_image_url}")
+                        resp_dict['preview_image_url'] = preview_image_url
+                    
+                    # 再提取其他文件信息
                     for file_3d in result_files[0].get('File3D', []):
                         file_type = file_3d.get('Type')
                         file_url = file_3d.get('Url')
@@ -180,6 +193,87 @@ def hunyuan_query_job(job_id):
         return None
 
 
+
+class Hunyuan3DClient:
+    """
+    混元3D模型生成客户端
+    封装了hunyuan_3d模块的功能，提供面向对象的接口
+    """
+    
+    def generate_from_image(self, image_url):
+        """
+        从图片URL生成3D模型
+        
+        Args:
+            image_url (str): 图片URL
+        
+        Returns:
+            dict: 包含job_id和status的结果字典
+        """
+        job_id = hunyuan_submit_job(image_url=image_url)
+        if job_id:
+            return {
+                'job_id': job_id,
+                'status': 'pending'
+            }
+        return None
+    
+    def generate_from_text(self, prompt):
+        """
+        从文本描述生成3D模型
+        
+        Args:
+            prompt (str): 文本描述
+        
+        Returns:
+            dict: 包含job_id和status的结果字典
+        """
+        job_id = hunyuan_submit_job(prompt=prompt)
+        if job_id:
+            return {
+                'job_id': job_id,
+                'status': 'pending'
+            }
+        return None
+    
+    def query_job(self, job_id):
+        """
+        查询3D模型生成任务状态
+        
+        Args:
+            job_id (str): 任务ID
+        
+        Returns:
+            dict: 任务状态和结果信息
+        """
+        result = hunyuan_query_job(job_id)
+        if result:
+            # 转换腾讯云SDK返回的状态格式为内部使用的格式
+            status_map = {
+                "RUN": "pending",
+                "DONE": "completed",
+                "FAILED": "failed"
+            }
+            
+            # 提取文件URL信息
+            file_urls = {}
+            if result.get('Status') == "DONE" and result.get('file_urls'):
+                file_urls = result['file_urls']
+            
+            # 准备返回结果，包含preview_image_url字段
+            return_dict = {
+                'job_id': job_id,
+                'status': status_map.get(result.get('Status'), 'unknown'),
+                'file_urls': file_urls,
+                'error_message': result.get('ErrorMsg')
+            }
+            
+            # 如果有preview_image_url，添加到返回结果中
+            if 'preview_image_url' in result:
+                return_dict['preview_image_url'] = result['preview_image_url']
+            
+            return return_dict
+        return None
 
 # 使用示例
 if __name__ == "__main__":

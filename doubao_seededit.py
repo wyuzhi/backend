@@ -1,5 +1,5 @@
-# 通过 pip install 'volcengine-python-sdk[ark]' 安装方舟SDK
 import os
+# 通过 pip install 'volcengine-python-sdk[ark]' 安装方舟SDK
 from volcenginesdkarkruntime import Ark
 
 def generate_image_with_doubao(
@@ -9,7 +9,7 @@ def generate_image_with_doubao(
         guidance_scale: float = 5.5,
         size: str = "adaptive",
         watermark: bool = True,
-        api_key: str = "YOUR_API_KEY",
+        api_key: str = "a8713c43-079c-4971-89db-b0ba6b41343f",
         base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
     ):
         """
@@ -78,4 +78,3 @@ if __name__ == "__main__":
 
     print(result_url)
 
-    ''' result_url 示例会包含临时访问凭证，实际使用时会自动生成 '''

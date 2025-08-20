@@ -1,308 +1,354 @@
+# 导入必要的模块
 import os
-import sys
-import time
 import json
+import time
 import logging
-import requests
-import zipfile
-import shutil
+import traceback
 from datetime import datetime
+import requests
+from zipfile import ZipFile
+from io import BytesIO
+import sys
 
-# 确保可以导入hunyuan_3d.py
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from hunyuan_3d import hunyuan_submit_job, hunyuan_query_job
+# 确保能导入app模块以访问数据库
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+sys.path.append(project_root)
 
 # 配置日志
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('3DModelGenerator')
 
 # 配置文件存储路径
-MODEL_STORAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'models')
-MODEL_FILES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'model_files')
-ZIP_FILES_PATH = os.path.join(MODEL_FILES_PATH, 'zips')
-EXTRACTED_FILES_PATH = os.path.join(MODEL_FILES_PATH, 'extracted')
+MODEL_STORAGE_PATH = os.path.join(current_dir, '../models')
+IMAGE_STORAGE_PATH = os.path.join(current_dir, '../images')
+
+# 创建存储目录（如果不存在）
 os.makedirs(MODEL_STORAGE_PATH, exist_ok=True)
-os.makedirs(ZIP_FILES_PATH, exist_ok=True)
-os.makedirs(EXTRACTED_FILES_PATH, exist_ok=True)
+os.makedirs(IMAGE_STORAGE_PATH, exist_ok=True)
 
-# 配置轮询间隔和超时时间
-POLLING_INTERVAL = 10  # 秒
-TIMEOUT = 300  # 5分钟
+# 定义轮询间隔（秒）
+POLLING_INTERVAL = 2
 
+# 导入hunyuan_3d模块
+from hunyuan_3d import *
+
+# 导入app模块以访问数据库
+from backend.app import db, Pet
+
+# 下载文件函数
 def download_file(url, save_path):
-    """
-    下载文件到指定路径
-    
-    Args:
-        url (str): 文件下载URL
-        save_path (str): 保存路径
-    
-    Returns:
-        bool: 下载是否成功
-    """
     try:
-        logger.info(f"开始下载文件: {url}")
         response = requests.get(url, stream=True)
         response.raise_for_status()
         
-        # 确保目录存在
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        
-        # 写入文件
         with open(save_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+                f.write(chunk)
         
-        logger.info(f"文件下载完成: {save_path}")
-        return True
+        return True, save_path
     except Exception as e:
         logger.error(f"下载文件失败: {str(e)}")
-        return False
+        return False, str(e)
 
-def extract_obj_from_zip(zip_path, extract_dir):
-    """
-    从ZIP文件中提取OBJ格式文件
-    
-    Args:
-        zip_path (str): ZIP文件路径
-        extract_dir (str): 解压目录
-    
-    Returns:
-        str: OBJ文件的路径，如果未找到则返回None
-    """
+# 从ZIP文件中提取OBJ文件
+def extract_obj_from_zip(zip_file_path, extract_dir):
     try:
-        logger.info(f"开始解压ZIP文件: {zip_path}")
-        
-        # 创建解压目录
-        os.makedirs(extract_dir, exist_ok=True)
-        
-        # 解压ZIP文件
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        with ZipFile(zip_file_path, 'r') as zip_ref:
+            # 创建解压目录
+            os.makedirs(extract_dir, exist_ok=True)
+            
+            # 解压所有文件
             zip_ref.extractall(extract_dir)
-        
-        logger.info(f"ZIP文件解压完成，解压目录: {extract_dir}")
-        
-        # 查找OBJ文件
-        obj_file = None
-        for root, dirs, files in os.walk(extract_dir):
-            for file in files:
-                if file.lower().endswith('.obj'):
-                    obj_file = os.path.join(root, file)
-                    logger.info(f"找到OBJ文件: {obj_file}")
-                    break
-            if obj_file:
-                break
-        
-        return obj_file
+            
+            # 查找OBJ文件
+            obj_files = []
+            for root, dirs, files in os.walk(extract_dir):
+                for file in files:
+                    if file.lower().endswith('.obj'):
+                        obj_files.append(os.path.join(root, file))
+            
+            if not obj_files:
+                logger.warning("ZIP文件中未找到OBJ文件")
+                # 查找其他3D模型文件格式
+                for root, dirs, files in os.walk(extract_dir):
+                    for file in files:
+                        if file.lower().endswith(('.fbx', '.gltf', '.glb', '.stl')):
+                            obj_files.append(os.path.join(root, file))
+                
+            return True, obj_files[0] if obj_files else None
     except Exception as e:
-        logger.error(f"解压ZIP文件或提取OBJ文件失败: {str(e)}")
-        return None
+        logger.error(f"解压ZIP文件失败: {str(e)}")
+        return False, str(e)
 
-def generate_3d_model(image_url=None, prompt=None):
-    """
-    生成3D模型的主函数
+# 生成3D模型的主函数
+def generate_3d_model(image_url=None, prompt=None, pet_id=None):
+    logger.info(f"开始生成3D模型 - pet_id: {pet_id}, image_url: {'已提供' if image_url else '未提供'}, prompt: {'已提供' if prompt else '未提供'}")
     
-    Args:
-        image_url (str, optional): 图片URL（图生3D模式）
-        prompt (str, optional): 3D内容描述（文生3D模式）
-    
-    Returns:
-        dict: 包含模型文件信息的字典，失败返回None
-    """
     try:
-        original_prompt = prompt  # 保存原始提示词，用于失败回退
+        # 创建3D客户端
+        client = Hunyuan3DClient()
         
-        # 确保不会同时使用图生3D和文生3D模式
-        # 优先使用图生3D模式
-        if image_url and prompt:
-            logger.info("同时提供了图片URL和提示词，将优先使用图生3D模式")
-            used_prompt = None  # 图生3D模式下不使用提示词
-        elif not image_url and not prompt:
-            logger.error("必须提供图片URL或提示词其中之一")
-            return None
-        else:
-            used_prompt = prompt
+        # 尝试使用图像生成3D模型（如果提供了图像）
+        if image_url:
+            try:
+                logger.info(f"尝试通过图像生成3D模型，URL: {image_url}")
+                result = client.generate_from_image(image_url)
+                if result:
+                    logger.info(f"通过图像生成3D模型成功，任务ID: {result.get('job_id', '未知')}")
+                    return process_3d_model_result(result, pet_id)
+            except Exception as e:
+                logger.error(f"通过图像生成3D模型失败: {str(e)}")
+                # 如果图像生成失败且提供了提示词，则尝试通过提示词生成
+                if prompt:
+                    logger.info("回退到通过提示词生成3D模型")
+                else:
+                    raise Exception("图像生成失败且未提供提示词")
         
-        # 提交3D生成任务（图生3D模式）
-        job_id = hunyuan_submit_job(prompt=used_prompt, image_url=image_url)
+        # 如果没有提供图像或图像生成失败，使用提示词生成
+        if prompt:
+            logger.info(f"通过提示词生成3D模型")
+            result = client.generate_from_text(prompt)
+            if result:
+                logger.info(f"通过提示词生成3D模型成功，任务ID: {result.get('job_id', '未知')}")
+                return process_3d_model_result(result, pet_id)
         
-        # 如果图生3D模式失败，尝试回退到文生3D模式
-        if not job_id and image_url and original_prompt:
-            logger.warning("图生3D模式失败，尝试回退到文生3D模式")
-            job_id = hunyuan_submit_job(prompt=original_prompt, image_url=None)
-            
-        if not job_id:
-            logger.error("提交3D生成任务失败")
-            return None
-        
-        logger.info(f"3D生成任务已提交，任务ID: {job_id}")
-        
-        # 轮询任务状态
-        start_time = time.time()
-        while time.time() - start_time < TIMEOUT:
-            time.sleep(POLLING_INTERVAL)
-            
-            result = hunyuan_query_job(job_id)
-            if not result:
-                logger.warning(f"查询任务状态失败，任务ID: {job_id}")
-                continue
-            
-            status = result.get('Status')
-            if status == "DONE":
-                logger.info(f"3D模型生成完成，任务ID: {job_id}")
-                
-                # 提取文件URL
-                result_file_3ds = result.get('ResultFile3Ds', [])
-                if not result_file_3ds or not isinstance(result_file_3ds, list) or len(result_file_3ds) == 0:
-                    logger.error(f"未能提取到文件URL，任务ID: {job_id}")
-                    return None
-                
-                # 处理模型文件URL
-                file_urls = {}
-                obj_file_local_path = None
-                
-                for file_info in result_file_3ds:
-                    file_type = file_info.get('Type', 'unknown')
-                    file_url = file_info.get('Url', '')
-                    
-                    # 只处理ZIP文件（根据示例数据，OBJ类型实际上是ZIP文件）
-                    if file_url and (file_type == 'OBJ' or file_url.endswith('.zip')):
-                        # 构建本地文件路径
-                        zip_filename = f"{job_id}.zip"
-                        zip_path = os.path.join(ZIP_FILES_PATH, zip_filename)
-                        
-                        # 下载ZIP文件
-                        if download_file(file_url, zip_path):
-                            # 解压并提取OBJ文件
-                            extract_dir = os.path.join(EXTRACTED_FILES_PATH, job_id)
-                            obj_file = extract_obj_from_zip(zip_path, extract_dir)
-                            
-                            if obj_file:
-                                # 构建服务器可访问的路径
-                                # 假设uploads目录是公开可访问的
-                                # 我们将OBJ文件复制到uploads目录，以便前端访问
-                                obj_filename = f"{job_id}_{os.path.basename(obj_file)}"
-                                obj_public_path = os.path.join('uploads', obj_filename)
-                                obj_dest_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), obj_public_path)
-                                
-                                # 确保uploads目录存在
-                                os.makedirs(os.path.dirname(obj_dest_path), exist_ok=True)
-                                
-                                # 复制文件
-                                shutil.copy2(obj_file, obj_dest_path)
-                                
-                                # 构建可访问的URL路径
-                                # 假设服务器的静态文件根目录是backend目录
-                                obj_file_local_path = f"/uploads/{obj_filename}"
-                                logger.info(f"OBJ文件已处理完成，本地路径: {obj_file_local_path}")
-                        
-                        # 无论是否处理成功，都将原始URL和处理后的本地路径保存
-                        file_urls[file_type] = {
-                            'url': file_url,
-                            'preview_image_url': file_info.get('PreviewImageUrl', ''),
-                            'local_path': obj_file_local_path
-                        }
-                    else:
-                        file_urls[file_type] = {
-                            'url': file_url,
-                            'preview_image_url': file_info.get('PreviewImageUrl', '')
-                        }
-                
-                # 保存模型信息
-                model_info = {
-                    'job_id': job_id,
-                    'created_at': datetime.now().isoformat(),
-                    'file_urls': file_urls,
-                    'prompt': prompt,
-                    'image_url': image_url
-                }
-                
-                # 将模型信息保存到文件
-                model_info_file = os.path.join(MODEL_STORAGE_PATH, f"{job_id}.json")
-                with open(model_info_file, 'w', encoding='utf-8') as f:
-                    json.dump(model_info, f, ensure_ascii=False, indent=4)
-                
-                logger.info(f"模型信息已保存到: {model_info_file}")
-                return model_info
-                
-            elif status == "FAILED":
-                error_msg = result.get('ErrorMsg', '未知错误')
-                logger.error(f"3D模型生成失败: {error_msg}")
-                return None
-                
-            elif status == "RUNNING":
-                progress = result.get('Progress', 0)
-                logger.info(f"3D模型生成中... 进度: {progress}%")
-                
-            else:
-                logger.info(f"任务状态: {status}")
-        
-        # 任务超时
-        logger.error(f"3D模型生成超时，任务ID: {job_id}")
+        # 如果都失败了
+        logger.error("3D模型生成失败，没有可用的生成方式")
         return None
         
     except Exception as e:
-        logger.exception(f"生成3D模型时发生错误: {str(e)}")
+        logger.error(f"生成3D模型时出错: {str(e)}")
+        traceback.print_exc()
         return None
 
+# 处理3D模型生成结果
+def process_3d_model_result(result, pet_id=None):
+    try:
+        # 获取任务ID和状态
+        job_id = result.get('job_id')
+        status = result.get('status', 'pending')
+        
+        # 如果任务还在处理中，进行轮询
+        if status == 'pending':
+            logger.info(f"任务 {job_id} 正在处理中，开始轮询...")
+            
+            # 创建3D客户端用于轮询
+            client = Hunyuan3DClient()
+            
+            # 轮询直到任务完成或超时
+            start_time = time.time()
+            max_wait_time = 300  # 最大等待时间5分钟
+            
+            while time.time() - start_time < max_wait_time:
+                # 更新宠物状态为generating（如果提供了pet_id）
+                if pet_id:
+                    update_pet_status(pet_id, 'generating')
+                    
+                # 轮询任务状态
+                result = client.query_job(job_id)
+                if result:
+                    status = result.get('status')
+                    
+                    if status == 'completed':
+                        logger.info(f"任务 {job_id} 完成")
+                        return save_and_process_model_files(result, pet_id)
+                    elif status == 'failed':
+                        logger.error(f"任务 {job_id} 失败: {result.get('error_message', '未知错误')}")
+                        # 更新宠物状态为failed
+                        if pet_id:
+                            update_pet_status(pet_id, 'failed')
+                        return None
+                    
+                # 等待一段时间后再次轮询
+                time.sleep(POLLING_INTERVAL)
+                
+            logger.error(f"任务 {job_id} 超时")
+            # 更新宠物状态为timeout
+            if pet_id:
+                update_pet_status(pet_id, 'timeout')
+            return None
+        
+        # 如果任务已经完成，直接处理结果
+        elif status == 'completed':
+            logger.info(f"任务 {job_id} 已完成，开始处理结果")
+            return save_and_process_model_files(result, pet_id)
+        
+        # 其他状态
+        else:
+            logger.error(f"任务 {job_id} 状态异常: {status}")
+            # 更新宠物状态为failed
+            if pet_id:
+                update_pet_status(pet_id, 'failed')
+            return None
+            
+    except Exception as e:
+        logger.error(f"处理3D模型结果时出错: {str(e)}")
+        traceback.print_exc()
+        # 更新宠物状态为failed
+        if pet_id:
+            update_pet_status(pet_id, 'failed')
+        return None
+
+# 保存和处理模型文件
+def save_and_process_model_files(result, pet_id=None):
+    try:
+        file_urls = result.get('file_urls', {})
+        
+        # 即使没有文件URL，只要有preview_image_url，也认为成功
+        if not file_urls and not result.get('preview_image_url'):
+            logger.error("没有找到文件URL和预览图URL")
+            # 更新宠物状态为failed
+            if pet_id:
+                update_pet_status(pet_id, 'failed')
+            return None
+        
+        # 创建唯一的模型ID
+        model_id = f"model_{int(time.time())}_{pet_id if pet_id else 'unknown'}"
+        model_dir = os.path.join(MODEL_STORAGE_PATH, model_id)
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # 保存模型信息
+        model_info = {
+            'model_id': model_id,
+            'creation_time': datetime.utcnow().isoformat(),
+            'file_urls': {},
+            # 保存preview_image_url以便后续使用
+            'preview_image_url': result.get('preview_image_url', '')
+        }
+        
+        # 无需下载文件，只保留文件URL信息
+        if file_urls:
+            logger.info(f"获取到文件URL信息，不进行下载: {list(file_urls.keys())}")
+            # 仅保存文件URL信息，不下载
+            for file_type, file_info in file_urls.items():
+                if isinstance(file_info, dict) and 'url' in file_info:
+                    model_info['file_urls'][file_type] = {
+                        'url': file_info['url']
+                        # 不保存local_path，因为不下载文件
+                    }
+                    # 保存预览图URL（如果有）
+                    if file_info.get('preview_image_url'):
+                        model_info['file_urls'][file_type]['preview_image_url'] = file_info['preview_image_url']
+        
+        # 保存模型信息到JSON文件
+        json_path = os.path.join(model_dir, 'model_info.json')
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(model_info, f, ensure_ascii=False, indent=2)
+        
+        logger.info(f"模型信息已保存到 {json_path}")
+        
+        # 更新宠物记录（如果提供了pet_id）
+        if pet_id:
+            update_pet_with_model_info(pet_id, model_info)
+        
+        return model_info
+        
+    except Exception as e:
+        logger.error(f"保存和处理模型文件时出错: {str(e)}")
+        traceback.print_exc()
+        # 更新宠物状态为failed
+        if pet_id:
+            update_pet_status(pet_id, 'failed')
+        return None
+
+# 更新宠物状态
+def update_pet_status(pet_id, status):
+    try:
+        # 获取宠物记录
+        pet = Pet.query.get(pet_id)
+        if pet:
+            # 更新状态
+            pet.status = status
+            db.session.commit()
+            logger.info(f"已更新宠物 {pet_id} 状态为 {status}")
+        else:
+            logger.error(f"未找到宠物记录，ID: {pet_id}")
+    except Exception as e:
+        logger.error(f"更新宠物状态时出错: {str(e)}")
+        db.session.rollback()
+
+# 更新宠物记录中的模型信息
+def update_pet_with_model_info(pet_id, model_info):
+    try:
+        # 获取宠物记录
+        pet = Pet.query.get(pet_id)
+        if pet:
+            # 优先使用顶层的preview_image_url（从hunyuan_3d.py中提取的）
+            if model_info.get('preview_image_url'):
+                pet.preview_url = model_info['preview_image_url']
+                logger.info(f"已更新宠物 {pet_id} 的预览图URL: {pet.preview_url}")
+            else:
+                # 其次获取OBJ文件路径和预览图（如果有）
+                file_urls = model_info.get('file_urls', {})
+                obj_file = file_urls.get('OBJ')
+                
+                if obj_file:
+                    # 不下载文件，直接使用远程URL
+                    pet.model_url = obj_file.get('url', '')
+                    if not pet.preview_url:  # 如果还没有设置preview_url，则从obj_file中获取
+                        pet.preview_url = obj_file.get('preview_image_url', '')
+            
+            # 更新状态为completed
+            pet.status = 'completed'
+            
+            db.session.commit()
+            logger.info(f"已更新宠物 {pet_id} 的模型信息")
+        else:
+            logger.error(f"未找到宠物记录，ID: {pet_id}")
+    except Exception as e:
+        logger.error(f"更新宠物模型信息时出错: {str(e)}")
+        db.session.rollback()
+
+# 根据宠物数据创建描述文本
 def create_pet_description(pet_data):
-    """
-    根据宠物信息创建3D模型生成的描述
+    # 从宠物数据中提取信息
+    name = pet_data.get('name', '宠物')
+    pet_type = pet_data.get('type', '')
+    gender = pet_data.get('gender', '')
+    personality = pet_data.get('personality', '')
+    hobby = pet_data.get('hobby', '')
+    story = pet_data.get('story', '')
+    # 构建描述文本
+    description = f"这是一只名叫{name}的"
     
-    Args:
-        pet_data (dict): 宠物信息
+    if pet_type:
+        description += f"{pet_type}"
+    else:
+        description += "小动物"
     
-    Returns:
-        str: 用于生成3D模型的描述文本
-    """
-    # 基础描述
-    gender_text = '公' if pet_data.get('gender') == 'male' else '母'
-    description = f"一只{gender_text}{pet_data.get('type', '狗狗')}"
+    if gender:
+        description += f"，性别是{gender}"
     
-    # 添加名称
-    if pet_data.get('name'):
-        description += f"，名叫{pet_data.get('name')}"
+    if personality:
+        description += f"，性格{personality}"
     
-    # 添加性格
-    personalities = pet_data.get('personality', '').split(',')
-    if personalities and personalities[0]:
-        description += f"，性格{('、').join(personalities)}"
+    if hobby:
+        description += f"，喜欢{hobby}"
     
-    # 添加爱好
-    hobbies = pet_data.get('hobby', '').split(',')
-    if hobbies and hobbies[0]:
-        description += f"，喜欢{('、').join(hobbies)}"
+    if story:
+        description += f"。{story}"
     
-    # 添加故事元素
-    if pet_data.get('story'):
-        description += f"，{pet_data.get('story')[:50]}..."
-    
-    # 艺术风格描述
-    description += "，高质量3D渲染，毛发细节清晰，色彩鲜明，表情可爱，充满活力，适合作为虚拟宠物伙伴。"
+    description += "。请根据这些信息生成一个可爱、生动的3D模型。"
     
     return description
 
-if __name__ == "__main__":
-    # 测试代码
+# 测试代码（仅在直接运行此脚本时执行）
+if __name__ == '__main__':
+    # 测试创建宠物描述
     test_pet_data = {
         'name': '小白',
-        'type': '狗狗',
-        'gender': 'male',
-        'personality': '活泼,聪明',
-        'hobby': '玩耍,进食',
-        'story': '一只可爱的小白狗，总是充满活力'
+        'type': '小狗',
+        'gender': '公',
+        'personality': '活泼可爱',
+        'hobby': '玩球',
+        'story': '这是一只非常可爱的小狗，喜欢和主人一起玩耍。'
     }
     
     prompt = create_pet_description(test_pet_data)
-    print(f"测试提示词: {prompt}")
+    print(f"测试生成的描述文本: {prompt}")
     
-    # 测试生成3D模型
+    # 注意：运行实际的3D模型生成可能需要API密钥和网络连接
+    # 如果需要测试完整流程，可以取消下面的注释
     # result = generate_3d_model(prompt=prompt)
-    # if result:
-    #     print(f"测试成功，生成结果: {result}")
-    # else:
-    #     print("测试失败")
+    # print(f"测试结果: {result}")

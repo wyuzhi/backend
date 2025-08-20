@@ -360,6 +360,7 @@ def create_pet_with_3d_model():
 @app.route('/api/pets/<int:pet_id>', methods=['GET'])
 def get_pet(pet_id):
     pet = Pet.query.get_or_404(pet_id)
+    # 添加宠物状态信息，用于前端轮询判断3D模型生成状态
     pet_data = {
         'id': pet.id,
         'name': pet.name,
@@ -371,9 +372,12 @@ def get_pet(pet_id):
         'generated_image': pet.generated_image,
         'model_url': pet.model_url,
         'preview_url': pet.preview_url,
-        'created_at': pet.created_at.isoformat()
+        'created_at': pet.created_at.isoformat(),
+        'status': pet.status,  # 包含宠物状态信息
+        'task_id': pet.task_id  # 包含任务ID
     }
-    return jsonify({'status': 'success', 'data': pet_data})
+    # 直接在根级别返回状态信息，方便前端直接获取
+    return jsonify({'status': pet.status, **pet_data})
 
 # 添加聊天记录路由
 @app.route('/api/pets/<int:pet_id>/chats', methods=['POST'])

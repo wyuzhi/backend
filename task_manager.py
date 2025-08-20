@@ -185,7 +185,8 @@ class TaskManager:
 
 # 提交3D模型生成任务的辅助函数
 def submit_3d_model_task(image_url=None, prompt=None, pet_id=None):
-    """提交3D模型生成任务
+    """
+    提交3D模型生成任务
     
     Args:
         image_url (str, optional): 图片URL
@@ -195,7 +196,8 @@ def submit_3d_model_task(image_url=None, prompt=None, pet_id=None):
     Returns:
         str: 任务ID
     """
-    task_manager = TaskManager()
+    # 由于TaskManager被singleton装饰，直接调用TaskManager()获取单例实例
+    task_manager = TaskManager
     
     task_id = task_manager.submit_task(
         task_type='3d_model_generation',

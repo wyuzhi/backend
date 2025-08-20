@@ -194,8 +194,10 @@ def process_3d_model_result(result, pet_id=None):
 def save_and_process_model_files(result, pet_id=None):
     try:
         file_urls = result.get('file_urls', {})
-        if not file_urls:
-            logger.error("没有找到文件URL")
+        
+        # 即使没有文件URL，只要有preview_image_url，也认为成功
+        if not file_urls and not result.get('preview_image_url'):
+            logger.error("没有找到文件URL和预览图URL")
             # 更新宠物状态为failed
             if pet_id:
                 update_pet_status(pet_id, 'failed')
@@ -210,39 +212,24 @@ def save_and_process_model_files(result, pet_id=None):
         model_info = {
             'model_id': model_id,
             'creation_time': datetime.utcnow().isoformat(),
-            'file_urls': {}
+            'file_urls': {},
+            # 保存preview_image_url以便后续使用
+            'preview_image_url': result.get('preview_image_url', '')
         }
         
-        # 下载和处理模型文件
-        for file_type, file_info in file_urls.items():
-            if isinstance(file_info, dict) and 'url' in file_info:
-                file_url = file_info['url']
-                file_name = os.path.basename(file_url.split('?')[0])
-                save_path = os.path.join(model_dir, file_name)
-                
-                # 下载文件
-                success, result = download_file(file_url, save_path)
-                if success:
-                    logger.info(f"成功下载 {file_type} 文件到 {save_path}")
+        # 无需下载文件，只保留文件URL信息
+        if file_urls:
+            logger.info(f"获取到文件URL信息，不进行下载: {list(file_urls.keys())}")
+            # 仅保存文件URL信息，不下载
+            for file_type, file_info in file_urls.items():
+                if isinstance(file_info, dict) and 'url' in file_info:
                     model_info['file_urls'][file_type] = {
-                        'url': file_url,
-                        'local_path': save_path
+                        'url': file_info['url']
+                        # 不保存local_path，因为不下载文件
                     }
-                    
-                    # 如果是ZIP文件，尝试提取OBJ文件
-                    if file_name.lower().endswith('.zip'):
-                        success, obj_path = extract_obj_from_zip(save_path, os.path.join(model_dir, 'extracted'))
-                        if success and obj_path:
-                            logger.info(f"成功提取OBJ文件: {obj_path}")
-                            model_info['file_urls']['OBJ'] = {
-                                'url': file_url,  # 使用原始ZIP文件URL
-                                'local_path': obj_path
-                            }
-                            # 添加预览图URL
-                            if file_info.get('preview_image_url'):
-                                model_info['file_urls']['OBJ']['preview_image_url'] = file_info['preview_image_url']
-                else:
-                    logger.error(f"下载 {file_type} 文件失败: {result}")
+                    # 保存预览图URL（如果有）
+                    if file_info.get('preview_image_url'):
+                        model_info['file_urls'][file_type]['preview_image_url'] = file_info['preview_image_url']
         
         # 保存模型信息到JSON文件
         json_path = os.path.join(model_dir, 'model_info.json')
@@ -287,14 +274,20 @@ def update_pet_with_model_info(pet_id, model_info):
         # 获取宠物记录
         pet = Pet.query.get(pet_id)
         if pet:
-            # 获取OBJ文件路径（如果有）
-            file_urls = model_info.get('file_urls', {})
-            obj_file = file_urls.get('OBJ')
-            
-            if obj_file:
-                # 使用本地路径优先
-                pet.model_url = obj_file.get('local_path', '') or obj_file.get('url', '')
-                pet.preview_url = obj_file.get('preview_image_url', '')
+            # 优先使用顶层的preview_image_url（从hunyuan_3d.py中提取的）
+            if model_info.get('preview_image_url'):
+                pet.preview_url = model_info['preview_image_url']
+                logger.info(f"已更新宠物 {pet_id} 的预览图URL: {pet.preview_url}")
+            else:
+                # 其次获取OBJ文件路径和预览图（如果有）
+                file_urls = model_info.get('file_urls', {})
+                obj_file = file_urls.get('OBJ')
+                
+                if obj_file:
+                    # 不下载文件，直接使用远程URL
+                    pet.model_url = obj_file.get('url', '')
+                    if not pet.preview_url:  # 如果还没有设置preview_url，则从obj_file中获取
+                        pet.preview_url = obj_file.get('preview_image_url', '')
             
             # 更新状态为completed
             pet.status = 'completed'
@@ -316,7 +309,6 @@ def create_pet_description(pet_data):
     personality = pet_data.get('personality', '')
     hobby = pet_data.get('hobby', '')
     story = pet_data.get('story', '')
-    stu
     # 构建描述文本
     description = f"这是一只名叫{name}的"
     

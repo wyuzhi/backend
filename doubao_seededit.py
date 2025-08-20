@@ -78,11 +78,3 @@ if __name__ == "__main__":
 
     print(result_url)
 
-    ''' result_url 示例
-    https://ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com/doubao-seededit-3-0-i2i/021755419250458d5bbc3e631479c4deb362d20ba806f7898fe59.jpeg?X-Tos-Algorithm=TOS4-HMAC-SHA256&X-T
-    os-Credential=AKLTYWJkZTExNjA1ZDUyNDc3YzhjNTM5OGIyNjBhNDcyOTQ%2F20250817%2Fcn-
-    beijing%2Ftos%2Frequest&X-Tos-Date=20250817T082741Z&X-Tos-Expires=86400&X-Tos-Sign
-    ature=8eb7c27b5d7a3fb3ffc5ebf6c42aa7517b4fe79d7edcf3fd1dca0068cb91e4d4&X-Tos-Signed
-    Headers=host&x-tos-process=image%2Fwatermark%2Cimage_YXNzZXRzL3dhdGVybWFyay5wbmc_eC1
-    0b3MtcHJvY2Vzcz1pbWFnZS9yZXNpemUsUF8xNg%3D%3D
-    '''

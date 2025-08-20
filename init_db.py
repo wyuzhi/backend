@@ -29,7 +29,9 @@ with app.app_context():
             story='这是一只测试宠物',
             generated_image='/images/test_pet.png',
             model_url='/models/cat.glb',
-            user_id=test_user.id
+            user_id=test_user.id,
+
+
         )
         db.session.add(test_pet)
         db.session.commit()

@@ -36,6 +36,9 @@ from hunyuan_3d import *
 # 导入app模块以访问数据库
 from backend.app import db, Pet
 
+# 导入豆包图片生成模块
+from doubao_seededit import generate_image_with_doubao
+
 # 下载文件函数
 def download_file(url, save_path):
     try:
@@ -92,18 +95,72 @@ def generate_3d_model(image_url=None, prompt=None, pet_id=None):
         # 尝试使用图像生成3D模型（如果提供了图像）
         if image_url:
             try:
-                logger.info(f"尝试通过图像生成3D模型，URL: {image_url}")
-                result = client.generate_from_image(image_url)
+                # 首先使用豆包生成新图片
+                logger.info(f"开始使用豆包生成新图片，原始图片URL: {image_url}")
+                
+                # 从数据库获取宠物信息，用于生成更准确的提示词
+                pet_prompt = """
+这是一只可爱的宠物，生成ip形象设计图。让宠物处于站立姿势、精准复刻特征，背景为纯白色，无杂色。
+毛发还原毛色，完全还原毛发走势和质感，胡须保色泽韧性。
+五官复刻眼球颜色、瞳孔形状，眼周毛走向，鼻子质感，嘴唇弧度；耳朵还原大小、弧度及内侧绒毛。
+肢体按原图比例：颈、躯干、四肢骨骼，脚掌肉垫，尾巴形态。站姿符合习性，自然协调。
+3D 渲染达高精度，毛发用 PBR 材质，显光影细节；三点布光，明暗分明。形象保留原生特征，强化细节、增强亲和力。
+"""
+                
+                # 如果有宠物ID，获取宠物信息来丰富提示词
+                if pet_id:
+                    try:
+                        pet = Pet.query.get(pet_id)
+                        if pet:
+                            # 构建更详细的宠物描述提示词
+                            pet_desc_parts = []
+                            if pet.name:
+                                pet_desc_parts.append(f"名叫{pet.name}")
+                            if pet.type:
+                                pet_desc_parts.append(f"是一只{pet.type}")
+                            if pet.gender:
+                                pet_desc_parts.append(f"，性别是{pet.gender}")
+                            if pet.personality:
+                                pet_desc_parts.append(f"，性格{pet.personality}")
+                            if pet.hobby:
+                                pet_desc_parts.append(f"，喜欢{pet.hobby}")
+                            
+                            if pet_desc_parts:
+                                pet_prompt = f"这是一只{' '.join(pet_desc_parts)}的宠物，" + pet_prompt
+                    except Exception as db_error:
+                        logger.error(f"获取宠物信息失败: {str(db_error)}")
+                        # 继续使用默认提示词
+                
+                # 调用豆包生成新图片
+                new_image_url = generate_image_with_doubao(
+                    prompt=pet_prompt,
+                    image_input=image_url
+                )
+                
+                logger.info(f"通过豆包生成新图片成功，新图片URL: {new_image_url}")
+                
+                # 使用新生成的图片URL来生成3D模型
+                logger.info(f"尝试通过新生成的图片生成3D模型")
+                result = client.generate_from_image(new_image_url)
                 if result:
-                    logger.info(f"通过图像生成3D模型成功，任务ID: {result.get('job_id', '未知')}")
+                    logger.info(f"通过新生成的图片生成3D模型成功，任务ID: {result.get('job_id', '未知')}")
                     return process_3d_model_result(result, pet_id)
             except Exception as e:
-                logger.error(f"通过图像生成3D模型失败: {str(e)}")
-                # 如果图像生成失败且提供了提示词，则尝试通过提示词生成
-                if prompt:
-                    logger.info("回退到通过提示词生成3D模型")
-                else:
-                    raise Exception("图像生成失败且未提供提示词")
+                logger.error(f"通过新生成的图片生成3D模型失败: {str(e)}")
+                # 如果新图片生成或3D模型生成失败，回退到使用原始图片
+                logger.info("回退到使用原始图片生成3D模型")
+                try:
+                    result = client.generate_from_image(image_url)
+                    if result:
+                        logger.info(f"通过原始图片生成3D模型成功，任务ID: {result.get('job_id', '未知')}")
+                        return process_3d_model_result(result, pet_id)
+                except Exception as fallback_error:
+                    logger.error(f"通过原始图片生成3D模型也失败: {str(fallback_error)}")
+                    # 如果原始图片生成也失败且提供了提示词，则尝试通过提示词生成
+                    if prompt:
+                        logger.info("回退到通过提示词生成3D模型")
+                    else:
+                        raise Exception("图像生成失败且未提供提示词")
         
         # 如果没有提供图像或图像生成失败，使用提示词生成
         if prompt:
@@ -335,6 +392,7 @@ def create_pet_description(pet_data):
 
 # 测试代码（仅在直接运行此脚本时执行）
 if __name__ == '__main__':
+    # 以下代码保持不变
     # 测试创建宠物描述
     test_pet_data = {
         'name': '小白',
